@@ -222,7 +222,7 @@ static void sleep_for_seconds(size_t seconds) {
 
 int main() {
     try {
-        std::string salt1 = {"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
+        std::string salt1 = {"0123454589dhn87y78389abcdef01234c23478y437d897w3u89ymde23nc789abcdef01234567c3249872hc347985xc54hu345ds873d8746h674778tg6g3bcdef012hyn78cw478657h4r789abcdef"};
 		size_t cnt = 0;
         std::cout << "=== Argon2id Cryptographic Test Program ===" << std::endl;
         std::cout << "Target Configuration: 2048 MiB (2GB) RAM, 4 iterations, 1 thread (AVX2 auto-enabled)" << std::endl;
