@@ -216,21 +216,24 @@ static bool write_vector_to_file(const std::string& filepath, const std::vector<
     return true;
 }
 
+inline static std::vector<uint8_t> string_to_bytes(const std::string& str) {
+    return std::vector<uint8_t>(str.begin(), str.end());
+}
+
 static void sleep_for_seconds(size_t seconds) {
     precise_busy_wait_dual_core(seconds*1000*1000,2);
 }
 
 int main() {
     try {
-        std::string salt1 = {"0123454589dhn87y78389abcdef01234c23478y437d897w3u89ymde23nc789abcdef01234567c3249872hc347985xc54hu345ds873d8746h674778tg6g3bcdef012hyn78cw478657h4r789abcdef"};
+        std::string salt1 = {"\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4"};
 		size_t cnt = 0;
         std::cout << "=== Argon2id Cryptographic Test Program ===" << std::endl;
         std::cout << "Target Configuration: 2048 MiB (2GB) RAM, 4 iterations, 1 thread (AVX2 auto-enabled)" << std::endl;
         std::vector<unsigned char> salt = generate_argon2_salt();
         Argon2id argon(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"limo"))), salt);
         std::string password(Argon2id::to_hex(argon.derive_binary()));
-
-        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"d3487487h7P>{}|%^&J%^843H{p}|}23JIb780yhf34{}:09MG45$#G{$R%^*@!L>{FEW"))), salt);
+        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle"))), (string_to_bytes(salt1)));
         std::string password_long(Argon2id::to_hex(argon2id.derive_binary()));
 
         std::cout << "Please enter the password for verification: " << std::flush;
