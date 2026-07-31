@@ -230,6 +230,9 @@ int main() {
         Argon2id argon(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"limo"))), salt);
         std::string password(Argon2id::to_hex(argon.derive_binary()));
 
+        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"d3487487h7P>{}|%^&J%^843H{p}|}23JIb780yhf34{}:09MG45$#G{$R%^*@!L>{FEW"))), salt);
+        std::string password_long(Argon2id::to_hex(argon2id.derive_binary()));
+
         std::cout << "Please enter the password for verification: " << std::flush;
 
         do {
@@ -269,11 +272,12 @@ int main() {
             std::string file_content = read_txt_to_string(filepart);
             SecureZeroMemory(filepart.data(), filepart.size());
             std::vector<unsigned char> vec(file_content.begin(), file_content.end());
-            std::string decrypted = CRYPTO::XChaCha20Poly1305::decrypt_to_string(vec, password, salt1);
+            std::string decrypted = CRYPTO::XChaCha20Poly1305::decrypt_to_string(vec, password_long, salt1);
 			std::cout << "Decrypted content: " << std::endl;
 			std::cout << decrypted << std::endl;
             SecureZeroMemory(vec.data(), vec.size());
             SecureZeroMemory(decrypted.data(), decrypted.size());
+            SecureZeroMemory(password_long.data(), password_long.size());
         }
         else {
             std::string filepart;
@@ -286,12 +290,14 @@ int main() {
             std::cin.clear();
             std::cin.ignore();
             getline(std::cin, file_content);
-            std::vector<uint8_t> encrypted = CRYPTO::XChaCha20Poly1305::encrypt(file_content, password,salt1);
+            std::vector<uint8_t> encrypted = CRYPTO::XChaCha20Poly1305::encrypt(file_content, password_long,salt1);
             if (!write_vector_to_file(filepart, encrypted)) {
 				std::cerr << "error" << std::endl;
                 return -1;
             }
             SecureZeroMemory(filepart.data(), filepart.size());
+            SecureZeroMemory(file_content.data(), file_content.size());
+            SecureZeroMemory(password_long.data(), password_long.size());
             std::clog << "Encrypted is ok..." << std::endl;
         }
 		std::cout << "Press Enter to exit..." << std::flush;
