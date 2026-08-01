@@ -4,10 +4,14 @@
 #include <chrono>
 #include <sstream>
 #include <fstream>
+#include <cwchar>
 #include "Argon2id.h"
 #include "toolkit.h"
 #include "ObfuscatedString.h"
 #include "XCHACHA20_POLY1305.h"
+
+#pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 inline static void play_unlock_animation() {
 #ifdef _WIN32
@@ -224,6 +228,126 @@ static void sleep_for_seconds(size_t seconds) {
     precise_busy_wait_dual_core(seconds*1000*1000,2);
 }
 
+// ==========================================
+// 1. 安全的手工结构体（绝不加 pack 对齐，完美适配 x64）
+// ==========================================
+typedef struct _MY_DATA_BLOB {
+    DWORD cbData;
+    BYTE* pbData;
+} MY_DATA_BLOB;
+
+typedef struct _MY_CREDENTIALW {
+    DWORD Flags; DWORD Type; LPWSTR TargetName; LPWSTR Comment;
+    FILETIME LastWritten; DWORD CredentialBlobSize; LPBYTE CredentialBlob;
+    DWORD Persist; DWORD AttributeCount; LPVOID Attributes;
+    LPWSTR TargetAlias; LPWSTR UserName;
+} MY_CREDENTIALW;
+
+constexpr auto MY_CRYPT_STRING_BASE64 = 0x00000001;
+
+static const BYTE g_QuantumEntropy[] = {
+    0x7F, 0x3E, 0x9A, 0xC4, 0x1B, 0xD2, 0x8E, 0x5F,
+    0xA1, 0x6C, 0x4B, 0x93, 0xE7, 0x2D, 0x10, 0x8A,
+    0xBD, 0xC3, 0x54, 0x6F, 0x2E, 0x91, 0x7A, 0x0B,
+    0x5E, 0x88, 0xDF, 0x1C
+};
+
+typedef BOOL(WINAPI* pfnCredReadW)(LPCWSTR, DWORD, DWORD, MY_CREDENTIALW**);
+typedef VOID(WINAPI* pfnCredFree)(LPVOID);
+typedef BOOL(WINAPI* pfnCryptStringToBinaryW)(LPCWSTR, DWORD, DWORD, BYTE*, DWORD*, DWORD*, DWORD*);
+typedef BOOL(WINAPI* pfnCryptUnprotectData)(MY_DATA_BLOB*, LPWSTR*, MY_DATA_BLOB*, LPVOID, LPVOID, DWORD, MY_DATA_BLOB*);
+
+static std::string GetDecryptedSecret_Final(const char* targetName) {
+    std::cout << "\n========== [DECRYPT START] ==========\n";
+    if (!targetName || !*targetName) return "";
+
+    // 字符串转换
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, targetName, -1, nullptr, 0);
+    std::vector<wchar_t> targetW(wlen);
+    MultiByteToWideChar(CP_UTF8, 0, targetName, -1, targetW.data(), wlen);
+    std::wstring sTarget(targetW.data());
+
+    // 动态加载 DLL
+    HMODULE hAdvapi = LoadLibraryW(L"advapi32.dll");
+    HMODULE hCrypt = LoadLibraryW(L"crypt32.dll");
+    if (!hAdvapi || !hCrypt) return "";
+
+    pfnCredReadW          fnCredReadW = (pfnCredReadW)GetProcAddress(hAdvapi, "CredReadW");
+    pfnCredFree           fnCredFree = (pfnCredFree)GetProcAddress(hAdvapi, "CredFree");
+    pfnCryptStringToBinaryW fnCryptStringToBinaryW = (pfnCryptStringToBinaryW)GetProcAddress(hCrypt, "CryptStringToBinaryW");
+    pfnCryptUnprotectData fnCryptUnprotectData = (pfnCryptUnprotectData)GetProcAddress(hCrypt, "CryptUnprotectData");
+
+    MY_CREDENTIALW* pCred = nullptr;
+
+    std::cout << "[*] 正在读取凭据: " << targetName << "\n";
+    if (!fnCredReadW(sTarget.c_str(), 1, 0, &pCred) || !pCred || !pCred->CredentialBlob) {
+        std::cout << "[-] CredReadW 读取失败，请检查凭据名称。\n";
+        FreeLibrary(hAdvapi); FreeLibrary(hCrypt);
+        return "";
+    }
+    std::cout << "[+] 读取成功! 大小: " << pCred->CredentialBlobSize << " 字节\n";
+
+    // 提取 UTF-16 Base64 字符串并清理尾部空字符
+    size_t charCount = pCred->CredentialBlobSize / sizeof(wchar_t);
+    std::wstring base64WStr(reinterpret_cast<wchar_t*>(pCred->CredentialBlob), charCount);
+    while (!base64WStr.empty() && (base64WStr.back() == L'\0' || iswspace(base64WStr.back()))) {
+        base64WStr.pop_back();
+    }
+
+    // 内存安全释放
+    fnCredFree(pCred);
+
+    // Base64 解码为原生二进制 Blob
+    DWORD decodedLen = 0;
+    if (!fnCryptStringToBinaryW(base64WStr.c_str(), 0, MY_CRYPT_STRING_BASE64, nullptr, &decodedLen, nullptr, nullptr)) {
+        std::cout << "[-] CryptStringToBinaryW 解析 Base64 失败! 错误码: " << GetLastError() << "\n";
+        FreeLibrary(hAdvapi); FreeLibrary(hCrypt);
+        return "";
+    }
+
+    std::vector<BYTE> cipherBytes(decodedLen);
+    fnCryptStringToBinaryW(base64WStr.c_str(), 0, MY_CRYPT_STRING_BASE64, cipherBytes.data(), &decodedLen, nullptr, nullptr);
+    std::cout << "[+] Base64 解码成功! DPAPI 密文真实大小: " << decodedLen << " 字节\n";
+
+    // 准备 DPAPI 解密参数
+    MY_DATA_BLOB dataIn = { static_cast<DWORD>(cipherBytes.size()), cipherBytes.data() };
+    MY_DATA_BLOB entropyBlob = { sizeof(g_QuantumEntropy), const_cast<BYTE*>(g_QuantumEntropy) };
+    MY_DATA_BLOB dataOut = { 0, nullptr };
+
+    std::string plainText = "";
+    BOOL decryptSuccess = FALSE;
+
+    // 遍历测试常见的加密标志
+    DWORD flagsList[] = { 0x04, 0x01, 0x00 };
+    for (DWORD flag : flagsList) {
+        std::cout << "[*] 尝试使用 Flag [0x0" << flag << "] 解密... ";
+        if (fnCryptUnprotectData(&dataIn, nullptr, &entropyBlob, nullptr, nullptr, flag, &dataOut)) {
+            std::cout << "成功!\n";
+            plainText.assign(reinterpret_cast<char*>(dataOut.pbData), dataOut.cbData);
+            SecureZeroMemory(dataOut.pbData, dataOut.cbData);
+            LocalFree(dataOut.pbData);
+            decryptSuccess = TRUE;
+            break;
+        }
+        else {
+            DWORD err = GetLastError();
+            std::cout << "失败 (错误码: 0x" << std::hex << err << std::dec << ")\n";
+        }
+    }
+
+    if (!decryptSuccess) {
+        std::cout << "\n[!] 严重警告: DPAPI 拒绝解密该数据。\n";
+        std::cout << "    -> 如果错误码是 0x80090005 (NTE_BAD_DATA)，100% 是因为你代码里的 g_QuantumEntropy 和写入时的不一致，或者不是同一台电脑/账户加密的。\n";
+    }
+    else {
+        std::cout << "[+] 最终明文解密成功!\n";
+    }
+
+    FreeLibrary(hAdvapi); FreeLibrary(hCrypt);
+    std::cout << "========== [DECRYPT END] ==========\n\n";
+    return plainText;
+}
+
 int main() {
     try {
         std::string salt1 = {"\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4"};
@@ -231,7 +355,7 @@ int main() {
         std::cout << "=== Argon2id Cryptographic Test Program ===" << std::endl;
         std::cout << "Target Configuration: 2048 MiB (2GB) RAM, 4 iterations, 1 thread (AVX2 auto-enabled)" << std::endl;
         std::vector<unsigned char> salt = generate_argon2_salt();
-        Argon2id argon(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"limo"))), salt);
+        Argon2id argon(GetDecryptedSecret_Final("limo"), salt);
         std::string password(Argon2id::to_hex(argon.derive_binary()));
         Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle"))), (string_to_bytes(salt1)));
         std::string password_long(Argon2id::to_hex(argon2id.derive_binary()));
