@@ -245,12 +245,26 @@ typedef struct _MY_CREDENTIALW {
 
 constexpr auto MY_CRYPT_STRING_BASE64 = 0x00000001;
 
-static const BYTE g_QuantumEntropy[] = {
-    0x7F, 0x3E, 0x9A, 0xC4, 0x1B, 0xD2, 0x8E, 0x5F,
-    0xA1, 0x6C, 0x4B, 0x93, 0xE7, 0x2D, 0x10, 0x8A,
-    0xBD, 0xC3, 0x54, 0x6F, 0x2E, 0x91, 0x7A, 0x0B,
-    0x5E, 0x88, 0xDF, 0x1C
-};
+// 1. 保留原生数组定义，去掉 const 以便运行期动态写入，完美兼容 sizeof 和强制类型转换
+static BYTE g_QuantumEntropy[28];
+
+// 2. 利用静态结构体在运行期瞬间解密并填充数据
+static const struct _QuantumEntropyInit {
+    _QuantumEntropyInit() {
+        // 使用宏对原生 Hex 字符串进行混淆
+        std::string s = OBFUSCATE_STR(
+            "\x7F\x3E\x9A\xC4\x1B\xD2\x8E\x5F"
+            "\xA1\x6C\x4B\x93\xE7\x2D\x10\x8A"
+            "\xBD\xC3\x54\x6F\x2E\x91\x7A\x0B"
+            "\x5E\x88\xDF\x1C"
+        );
+        // 将解密后的真实数据拷贝到数组中
+        memcpy(g_QuantumEntropy, s.data(), 28);
+
+        // 用完即刻清理栈上明文痕迹
+        SecureZeroMemory(s.data(), 28);
+    }
+} _g_QuantumEntropy_init;
 
 typedef BOOL(WINAPI* pfnCredReadW)(LPCWSTR, DWORD, DWORD, MY_CREDENTIALW**);
 typedef VOID(WINAPI* pfnCredFree)(LPVOID);
@@ -350,14 +364,16 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
 
 int main() {
     try {
-        std::string salt1 = {"\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4"};
+        std::string salt1 = { OBFUSCATE_STR("\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4")};
 		size_t cnt = 0;
         std::cout << "=== Argon2id Cryptographic Test Program ===" << std::endl;
         std::cout << "Target Configuration: 2048 MiB (2GB) RAM, 4 iterations, 1 thread (AVX2 auto-enabled)" << std::endl;
         std::vector<unsigned char> salt = generate_argon2_salt();
-        Argon2id argon(GetDecryptedSecret_Final("limo"), salt);
+		std::string pass = GetDecryptedSecret_Final(OBFUSCATE_STR("limo").c_str());
+        Argon2id argon(pass, salt);
+        SecureZeroMemory(pass.data(), pass.size());
         std::string password(Argon2id::to_hex(argon.derive_binary()));
-        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle"))), (string_to_bytes(salt1)));
+        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle").c_str())), (string_to_bytes(salt1)));
         std::string password_long(Argon2id::to_hex(argon2id.derive_binary()));
 
         std::cout << "Please enter the password for verification: " << std::flush;
