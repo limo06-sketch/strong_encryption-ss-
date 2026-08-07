@@ -10,7 +10,7 @@
 class Argon2id final {
 public:
     static constexpr uint64_t OPS_LIMIT = 4;
-    static constexpr size_t   MEM_LIMIT = 2048ULL * 1024ULL * 1024ULL;
+    static constexpr size_t   MEM_LIMIT = 2048ULL * 1024ULL * 1024ULL;//2GB
     static constexpr size_t   KEY_LEN = 64;
     static constexpr size_t   SALT_LEN = crypto_pwhash_SALTBYTES;
     static constexpr int      ALG = crypto_pwhash_ALG_ARGON2ID13;
