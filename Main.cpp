@@ -1,10 +1,17 @@
 #include <iostream>
 #include <vector>
+#include <filesystem>
+#include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <chrono>
 #include <sstream>
 #include <fstream>
 #include <cwchar>
+#include <thread>
+#include <limits>
+#include <windows.h>
+
 #include "Argon2id.h"
 #include "toolkit.h"
 #include "ObfuscatedString.h"
@@ -13,6 +20,9 @@
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "advapi32.lib")
 
+// ==========================================
+// 解锁动画
+// ==========================================
 inline static void play_unlock_animation() {
 #ifdef _WIN32
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -25,10 +35,9 @@ inline static void play_unlock_animation() {
     // 隐藏控制台光标
     std::cout << "\033[?25l";
 
-    // 旋转字符集（模拟锁芯/钥匙旋转）
     const char rot_chars[] = { '-', '/', '|', '\\' };
 
-    // ================= 阶段 1：钥匙插锁与 180 度机械转动特效 =================
+    // 阶段 1：旋转动画
     for (int angle = 0; angle <= 180; angle += 15) {
         std::system("cls");
 
@@ -38,7 +47,6 @@ inline static void play_unlock_animation() {
         std::cout << "\033[1;33m[!] CRACKING: ENGAGING MECHANICAL KEY...\033[0m\n";
         std::cout << "\033[1;30m[!] TURNING TUMBLER: " << angle << "° / 180° [" << cur_rot << "]\033[0m\n\n";
 
-        // 锁体 ANSI 绘制（中间带转动中的锁芯标识）
         std::cout << "\033[1;31m"
             << "       /------\\\n"
             << "      /        \\\n"
@@ -51,7 +59,6 @@ inline static void play_unlock_animation() {
             << " [|--------------|]\n"
             << "\033[0m\n";
 
-        // 动态转动进度条
         std::cout << "\033[1;33m[ROTATING] [";
         int bar_width = 20;
         int pos = (percent * bar_width) / 100;
@@ -62,13 +69,11 @@ inline static void play_unlock_animation() {
         }
         std::cout << "] " << percent << "%\033[0m\n" << std::flush;
 
-        // 步进控制：让转动过程平滑且有节奏感
         std::this_thread::sleep_for(std::chrono::milliseconds(120));
     }
 
-    // ================= 阶段 2：锁扣机械解除与摆动脱钩 =================
+    // 阶段 2：摆动脱钩
     const char* swing_frames[] = {
-        // 帧 A：锁舌脱离（左侧开口）
         "\033[1;33m[!] MECHANICAL OVERRIDE: TUMBLERS ALIGNED.\033[0m\n"
         "\033[1;33m[!] UNLATCHING LOCK SHACKLE...\033[0m\n\n"
         "\033[1;33m"
@@ -84,7 +89,6 @@ inline static void play_unlock_animation() {
         "\033[0m\n"
         "\033[1;33m[ROTATING] [====================] 100%\033[0m\n",
 
-        // 帧 B：锁钩向外旋转偏转
         "\033[1;33m[!] MECHANICAL OVERRIDE: SWINGING OPEN.\033[0m\n"
         "\033[1;33m[!] SHACKLE ROTATED OUTWARD\033[0m\n\n"
         "\033[1;33m"
@@ -107,7 +111,7 @@ inline static void play_unlock_animation() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    // ================= 阶段 3：终极破译成功（1:1 复刻图片效果） =================
+    // 阶段 3：解锁完成
     std::system("cls");
     std::cout << "\033[1;32m[!] WARNING: SYSTEM UNLOCKED! ACCESS GRANTED.\033[0m\n";
     std::cout << "\033[1;31m[!] SECURITY BREACH: LOCK DISENGAGED.\033[0m\n\n";
@@ -128,6 +132,9 @@ inline static void play_unlock_animation() {
     std::cout << "\033[?25h";
 }
 
+// ==========================================
+// 工具辅助函数
+// ==========================================
 inline static std::vector<unsigned char> generate_argon2_salt() {
     if (sodium_init() < 0) {
         throw std::runtime_error("libsodium initialization failed");
@@ -160,19 +167,11 @@ inline static std::vector<unsigned char> generate_argon2_salt() {
     return salt;
 }
 
-/**
- * @brief 读取文本文件内容到 string 中（完整保留格式和换行符）
- * @param filepath 文件路径
- * @return std::string 文件内容
- */
 static std::string read_txt_to_string(const std::string& filepath) {
-    // 以二进制模式打开文件，避免 Windows/Linux 换行符（\r\n vs \n）被自动转换
     std::ifstream file(filepath, std::ios::in | std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file: " + filepath);
     }
-
-    // 利用流迭代器直接将整个文件读入 string
     return std::string(
         (std::istreambuf_iterator<char>(file)),
         std::istreambuf_iterator<char>()
@@ -180,44 +179,17 @@ static std::string read_txt_to_string(const std::string& filepath) {
 }
 
 static std::string vector_to_string(const std::vector<unsigned char>& vec) {
-    if (vec.empty()) {
-        return std::string();
-    }
-    // 使用 reinterpret_cast 将 unsigned char* 转换为 const char*
-    return std::string(
-        reinterpret_cast<const char*>(vec.data()),
-        vec.size()
-    );
+    if (vec.empty()) return std::string();
+    return std::string(reinterpret_cast<const char*>(vec.data()), vec.size());
 }
 
-/**
- * @brief 将 std::vector<uint8_t> 写入到二进制文件
- * @param filepath 目标文件路径
- * @param data 要写入的数据向量
- * @return bool 是否写入成功
- */
 static bool write_vector_to_file(const std::string& filepath, const std::vector<uint8_t>& data) {
-    // 以二进制模式和覆盖写入模式打开文件
     std::ofstream file(filepath, std::ios::out | std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
+    if (!file.is_open()) return false;
+    if (data.empty()) return true;
 
-    // 如果 vector 为空，直接关闭并返回成功
-    if (data.empty()) {
-        return true;
-    }
-
-    // 核心写入代码：传入底层指针和总字节数
     file.write(reinterpret_cast<const char*>(data.data()), data.size());
-
-    // 检查写入过程中是否出错
-    if (!file) {
-        return false;
-    }
-
-    file.close();
-    return true;
+    return static_cast<bool>(file);
 }
 
 inline static std::vector<uint8_t> string_to_bytes(const std::string& str) {
@@ -225,11 +197,11 @@ inline static std::vector<uint8_t> string_to_bytes(const std::string& str) {
 }
 
 static void sleep_for_seconds(size_t seconds) {
-    precise_busy_wait_dual_core(seconds*1000*1000,2);
+    precise_busy_wait_dual_core(seconds * 1000 * 1000, 2);
 }
 
 // ==========================================
-// 1. 安全的手工结构体（绝不加 pack 对齐，完美适配 x64）
+// Windows DPAPI & Credential 结构体定义
 // ==========================================
 typedef struct _MY_DATA_BLOB {
     DWORD cbData;
@@ -245,23 +217,17 @@ typedef struct _MY_CREDENTIALW {
 
 constexpr auto MY_CRYPT_STRING_BASE64 = 0x00000001;
 
-// 1. 保留原生数组定义，去掉 const 以便运行期动态写入，完美兼容 sizeof 和强制类型转换
 static BYTE g_QuantumEntropy[28];
 
-// 2. 利用静态结构体在运行期瞬间解密并填充数据
 static const struct _QuantumEntropyInit {
     _QuantumEntropyInit() {
-        // 使用宏对原生 Hex 字符串进行混淆
         std::string s = OBFUSCATE_STR(
             "\x7F\x3E\x9A\xC4\x1B\xD2\x8E\x5F"
             "\xA1\x6C\x4B\x93\xE7\x2D\x10\x8A"
             "\xBD\xC3\x54\x6F\x2E\x91\x7A\x0B"
             "\x5E\x88\xDF\x1C"
         );
-        // 将解密后的真实数据拷贝到数组中
         memcpy(g_QuantumEntropy, s.data(), 28);
-
-        // 用完即刻清理栈上明文痕迹
         SecureZeroMemory(s.data(), 28);
     }
 } _g_QuantumEntropy_init;
@@ -275,13 +241,11 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     std::cout << "\n========== [DECRYPT START] ==========\n";
     if (!targetName || !*targetName) return "";
 
-    // 字符串转换
     int wlen = MultiByteToWideChar(CP_UTF8, 0, targetName, -1, nullptr, 0);
     std::vector<wchar_t> targetW(wlen);
     MultiByteToWideChar(CP_UTF8, 0, targetName, -1, targetW.data(), wlen);
     std::wstring sTarget(targetW.data());
 
-    // 动态加载 DLL
     HMODULE hAdvapi = LoadLibraryW(L"advapi32.dll");
     HMODULE hCrypt = LoadLibraryW(L"crypt32.dll");
     if (!hAdvapi || !hCrypt) return "";
@@ -301,17 +265,14 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     }
     std::cout << "[+] 读取成功! 大小: " << pCred->CredentialBlobSize << " 字节\n";
 
-    // 提取 UTF-16 Base64 字符串并清理尾部空字符
     size_t charCount = pCred->CredentialBlobSize / sizeof(wchar_t);
     std::wstring base64WStr(reinterpret_cast<wchar_t*>(pCred->CredentialBlob), charCount);
     while (!base64WStr.empty() && (base64WStr.back() == L'\0' || iswspace(base64WStr.back()))) {
         base64WStr.pop_back();
     }
 
-    // 内存安全释放
     fnCredFree(pCred);
 
-    // Base64 解码为原生二进制 Blob
     DWORD decodedLen = 0;
     if (!fnCryptStringToBinaryW(base64WStr.c_str(), 0, MY_CRYPT_STRING_BASE64, nullptr, &decodedLen, nullptr, nullptr)) {
         std::cout << "[-] CryptStringToBinaryW 解析 Base64 失败! 错误码: " << GetLastError() << "\n";
@@ -323,7 +284,6 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     fnCryptStringToBinaryW(base64WStr.c_str(), 0, MY_CRYPT_STRING_BASE64, cipherBytes.data(), &decodedLen, nullptr, nullptr);
     std::cout << "[+] Base64 解码成功! DPAPI 密文真实大小: " << decodedLen << " 字节\n";
 
-    // 准备 DPAPI 解密参数
     MY_DATA_BLOB dataIn = { static_cast<DWORD>(cipherBytes.size()), cipherBytes.data() };
     MY_DATA_BLOB entropyBlob = { sizeof(g_QuantumEntropy), const_cast<BYTE*>(g_QuantumEntropy) };
     MY_DATA_BLOB dataOut = { 0, nullptr };
@@ -331,7 +291,6 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     std::string plainText = "";
     BOOL decryptSuccess = FALSE;
 
-    // 遍历测试常见的加密标志
     DWORD flagsList[] = { 0x04, 0x01, 0x00 };
     for (DWORD flag : flagsList) {
         std::cout << "[*] 尝试使用 Flag [0x0" << flag << "] 解密... ";
@@ -351,7 +310,6 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
 
     if (!decryptSuccess) {
         std::cout << "\n[!] 严重警告: DPAPI 拒绝解密该数据。\n";
-        std::cout << "    -> 如果错误码是 0x80090005 (NTE_BAD_DATA)，100% 是因为你代码里的 g_QuantumEntropy 和写入时的不一致，或者不是同一台电脑/账户加密的。\n";
     }
     else {
         std::cout << "[+] 最终明文解密成功!\n";
@@ -362,93 +320,134 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     return plainText;
 }
 
+// ==========================================
+// 主程序入口
+// ==========================================
 int main() {
     try {
-        std::string salt1 = { OBFUSCATE_STR("\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4")};
-		size_t cnt = 0;
+        size_t cnt = 0;
         std::cout << "=== Argon2id Cryptographic Test Program ===" << std::endl;
         std::cout << "Target Configuration: 2048 MiB (2GB) RAM, 4 iterations, 1 thread (AVX2 auto-enabled)" << std::endl;
+
         std::vector<unsigned char> salt = generate_argon2_salt();
-		std::string pass = GetDecryptedSecret_Final(OBFUSCATE_STR("limo").c_str());
+        std::string pass = GetDecryptedSecret_Final(OBFUSCATE_STR("limo").c_str());
+
         Argon2id argon(pass, salt);
         SecureZeroMemory(pass.data(), pass.size());
         std::string password(Argon2id::to_hex(argon.derive_binary()));
-        Argon2id argon2id(read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle").c_str())), (string_to_bytes(salt1)));
+
+        Argon2id argon2id(
+            read_windows_credential_utf8(std::wstring(OBFUSCATE_STR(L"filedle").c_str())),
+            (string_to_bytes(OBFUSCATE_STR("\x8F\x3C\xA1\x7E\x5D\x2B\x90\x44\x12\x6E\xF5\x8A\x33\xC9\x7B\xE4")))
+        );
         std::string password_long(Argon2id::to_hex(argon2id.derive_binary()));
 
         std::cout << "Please enter the password for verification: " << std::flush;
 
+        // 密码校验循环
         do {
             Argon2id password_derived(std::string(read_secure_password_utf8()), salt);
-            if(secure_compare(Argon2id::to_hex(password_derived.derive_binary()),password))
-            {
+            if (secure_compare(Argon2id::to_hex(password_derived.derive_binary()), password)) {
                 std::cout << "Password verified successfully!" << std::endl;
-                SecureZeroMemory(password.data(), password .size());
-				goto ss_main;
+                SecureZeroMemory(password.data(), password.size());
+                goto ss_main;
             }
-			std::cout << "Incorrect password. Please try again: " << std::flush;
+            std::cout << "Incorrect password. Please try again: " << std::flush;
             ++cnt;
-            size_t time = 15 * cnt;
-            while(time>0)
-            {
-				std::cout << "\rPlease wait " << time << " seconds before retrying...     " << std::flush;
+            size_t wait_time = 15 * cnt;
+            while (wait_time > 0) {
+                std::cout << "\rPlease wait " << wait_time << " seconds before retrying...     " << std::flush;
                 sleep_for_seconds(1);
-                --time;
+                --wait_time;
             }
-			std::cout << "\rYou can now try again. Please enter the password: " << std::flush;
+            std::cout << "\rYou can now try again. Please enter the password: " << std::flush;
         } while (true);
+
     ss_main:
         play_unlock_animation();
-		std::clog << "Would you like to encrypt or decrypt?(1 to encrypt, 2 to decrypt): " << std::endl;
-		bool encrypt = false;
-		int choice;
-		std::cin >> choice;
-        if(choice == 2){
-            encrypt = true;
-        }
-        if(encrypt){
+
+        std::clog << "Would you like to encrypt or decrypt? (1 to encrypt, 2 to decrypt): " << std::endl;
+        int choice = 0;
+        std::cin >> choice;
+        // 清理 cin 中的换行符，防止影响后续的 std::getline
+        std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
+
+        if (choice == 2) {
+            // =========================================================
+            // 解密逻辑
+            // =========================================================
             std::string filepart;
-			std::cout << "Please enter the file path (e.g.): " << std::flush;
-            std::cin.clear();
-            std::cin.ignore();
-            getline(std::cin, filepart);
-            std::string file_content = read_txt_to_string(filepart);
-            SecureZeroMemory(filepart.data(), filepart.size());
-            std::vector<unsigned char> vec(file_content.begin(), file_content.end());
-            std::string decrypted = CRYPTO::XChaCha20Poly1305::decrypt_to_string(vec, password_long, salt1);
-			std::cout << "Decrypted content: " << std::endl;
-			std::cout << decrypted << std::endl;
-            SecureZeroMemory(vec.data(), vec.size());
+            std::cout << "Please enter the file path to decrypt: " << std::flush;
+            std::getline(std::cin, filepart);
+
+            // 1. 一次性读取完整加密文件
+            std::string file_raw = read_txt_to_string(filepart);
+            if (file_raw.size() < 16) {
+                throw std::runtime_error("File size is too small or invalid (missing salt prefix)!");
+            }
+
+            // 2. 拆分文件头 16 字节 Salt 与后续的 Ciphertext Payload
+            std::string salt1 = file_raw.substr(0, 16);
+            std::vector<uint8_t> cipher_payload(file_raw.begin() + 16, file_raw.end());
+
+            // 3. 执行解密
+            std::string decrypted = CRYPTO::XChaCha20Poly1305::decrypt_to_string(cipher_payload, password_long, salt1);
+
+            std::cout << "\nDecrypted content: " << std::endl;
+            std::cout << decrypted << std::endl;
+
+            // 4. 清理敏感数据 (注意：绝对不要清理 filepart)
+            SecureZeroMemory(cipher_payload.data(), cipher_payload.size());
             SecureZeroMemory(decrypted.data(), decrypted.size());
             SecureZeroMemory(password_long.data(), password_long.size());
+
         }
         else {
+            // =========================================================
+            // 加密逻辑
+            // =========================================================
             std::string filepart;
-            std::cout << "Please enter the file path (e.g.): " << std::flush;
-            std::cin.clear();
-            std::cin.ignore();
-            getline(std::cin, filepart);
-            std::string file_content = std::string();
-            std::cout<<"Please enter the content to encrypt: " << std::flush;
-            std::cin.clear();
-            std::cin.ignore();
-            getline(std::cin, file_content);
-            std::vector<uint8_t> encrypted = CRYPTO::XChaCha20Poly1305::encrypt(file_content, password_long,salt1);
-            if (!write_vector_to_file(filepart, encrypted)) {
-				std::cerr << "error" << std::endl;
+            std::cout << "Please enter the file path to save: " << std::flush;
+            std::getline(std::cin, filepart);
+
+            std::string file_content;
+            std::cout << "Please enter the content to encrypt: " << std::flush;
+            std::getline(std::cin, file_content);
+
+            // 1. 生成 16 字节 Salt
+            auto salt1 = generate_argon2_salt();
+            std::string salt1_str = vector_to_string(salt1);
+
+            // 2. 加密得到密文数组 (Nonce + Ciphertext + Poly1305 Tag)
+            std::vector<uint8_t> encrypted = CRYPTO::XChaCha20Poly1305::encrypt(file_content, password_long, salt1_str);
+
+            // 3. 拼装数据结构: [ 16 Bytes Salt ] + [ Encrypted Payload ]
+            std::vector<uint8_t> final_file_data;
+            final_file_data.reserve(salt1.size() + encrypted.size());
+            final_file_data.insert(final_file_data.end(), salt1.begin(), salt1.end());
+            final_file_data.insert(final_file_data.end(), encrypted.begin(), encrypted.end());
+
+            // 4. 写入文件
+            if (!write_vector_to_file(filepart, final_file_data)) {
+                std::cerr << "Error writing encrypted data to file!" << std::endl;
                 return -1;
             }
-            SecureZeroMemory(filepart.data(), filepart.size());
+
+            // 5. 安全擦除内存痕迹
+            SecureZeroMemory(salt1.data(), salt1.size());
             SecureZeroMemory(file_content.data(), file_content.size());
             SecureZeroMemory(password_long.data(), password_long.size());
-            std::clog << "Encrypted is ok..." << std::endl;
+
+            std::clog << "Encryption completed successfully." << std::endl;
         }
-		std::cout << "Press Enter to exit..." << std::flush;
+
+        std::cout << "Press Enter to exit..." << std::flush;
         std::cin.get();
-	}
-	catch (const std::exception& e) {
-		std::cerr << "\n[Error] Exception caught: " << e.what() << std::endl;
-		return 1;
-	}
+
+    }
+    catch (const std::exception& e) {
+        std::cerr << "\n[Error] Exception caught: " << e.what() << std::endl;
+        return 1;
+    }
     return 0;
 }
