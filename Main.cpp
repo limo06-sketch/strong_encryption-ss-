@@ -295,7 +295,7 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
     for (DWORD flag : flagsList) {
         //std::cout << "[*] 尝试使用 Flag [0x0" << flag << "] 解密... ";
         if (fnCryptUnprotectData(&dataIn, nullptr, &entropyBlob, nullptr, nullptr, flag, &dataOut)) {
-            std::cout << "成功!\n";
+            //std::cout << "成功!\n";
             plainText.assign(reinterpret_cast<char*>(dataOut.pbData), dataOut.cbData);
             SecureZeroMemory(dataOut.pbData, dataOut.cbData);
             LocalFree(dataOut.pbData);
