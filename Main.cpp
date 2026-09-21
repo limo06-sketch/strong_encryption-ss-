@@ -238,7 +238,7 @@ typedef BOOL(WINAPI* pfnCryptStringToBinaryW)(LPCWSTR, DWORD, DWORD, BYTE*, DWOR
 typedef BOOL(WINAPI* pfnCryptUnprotectData)(MY_DATA_BLOB*, LPWSTR*, MY_DATA_BLOB*, LPVOID, LPVOID, DWORD, MY_DATA_BLOB*);
 
 static std::string GetDecryptedSecret_Final(const char* targetName) {
-    std::cout << "\n========== [DECRYPT START] ==========\n";
+    //std::cout << "\n========== [DECRYPT START] ==========\n";
     if (!targetName || !*targetName) return "";
 
     int wlen = MultiByteToWideChar(CP_UTF8, 0, targetName, -1, nullptr, 0);
@@ -257,13 +257,13 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
 
     MY_CREDENTIALW* pCred = nullptr;
 
-    std::cout << "[*] 正在读取凭据: " << targetName << "\n";
+    //std::cout << "[*] 正在读取凭据: " << targetName << "\n";
     if (!fnCredReadW(sTarget.c_str(), 1, 0, &pCred) || !pCred || !pCred->CredentialBlob) {
         std::cout << "[-] CredReadW 读取失败，请检查凭据名称。\n";
         FreeLibrary(hAdvapi); FreeLibrary(hCrypt);
         return "";
     }
-    std::cout << "[+] 读取成功! 大小: " << pCred->CredentialBlobSize << " 字节\n";
+    //std::cout << "[+] 读取成功! 大小: " << pCred->CredentialBlobSize << " 字节\n";
 
     size_t charCount = pCred->CredentialBlobSize / sizeof(wchar_t);
     std::wstring base64WStr(reinterpret_cast<wchar_t*>(pCred->CredentialBlob), charCount);
@@ -282,7 +282,7 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
 
     std::vector<BYTE> cipherBytes(decodedLen);
     fnCryptStringToBinaryW(base64WStr.c_str(), 0, MY_CRYPT_STRING_BASE64, cipherBytes.data(), &decodedLen, nullptr, nullptr);
-    std::cout << "[+] Base64 解码成功! DPAPI 密文真实大小: " << decodedLen << " 字节\n";
+    //std::cout << "[+] Base64 解码成功! DPAPI 密文真实大小: " << decodedLen << " 字节\n";
 
     MY_DATA_BLOB dataIn = { static_cast<DWORD>(cipherBytes.size()), cipherBytes.data() };
     MY_DATA_BLOB entropyBlob = { sizeof(g_QuantumEntropy), const_cast<BYTE*>(g_QuantumEntropy) };
@@ -293,7 +293,7 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
 
     DWORD flagsList[] = { 0x04, 0x01, 0x00 };
     for (DWORD flag : flagsList) {
-        std::cout << "[*] 尝试使用 Flag [0x0" << flag << "] 解密... ";
+        //std::cout << "[*] 尝试使用 Flag [0x0" << flag << "] 解密... ";
         if (fnCryptUnprotectData(&dataIn, nullptr, &entropyBlob, nullptr, nullptr, flag, &dataOut)) {
             std::cout << "成功!\n";
             plainText.assign(reinterpret_cast<char*>(dataOut.pbData), dataOut.cbData);
@@ -312,11 +312,11 @@ static std::string GetDecryptedSecret_Final(const char* targetName) {
         std::cout << "\n[!] 严重警告: DPAPI 拒绝解密该数据。\n";
     }
     else {
-        std::cout << "[+] 最终明文解密成功!\n";
+        //std::cout << "[+] 最终明文解密成功!\n";
     }
 
     FreeLibrary(hAdvapi); FreeLibrary(hCrypt);
-    std::cout << "========== [DECRYPT END] ==========\n\n";
+    //std::cout << "========== [DECRYPT END] ==========\n\n";
     return plainText;
 }
 
